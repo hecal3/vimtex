@@ -10,10 +10,12 @@ function! vimtex#complete#init_options() " {{{1
 
   call vimtex#util#set_default('g:vimtex_complete_close_braces', 0)
   call vimtex#util#set_default('g:vimtex_complete_recursive_bib', 0)
+  call vimtex#util#set_default('g:vimtex_complete_recursive_gls', 0)
   call vimtex#util#set_default('g:vimtex_complete_patterns',
         \ {
         \ 'ref' : '\C\\v\?\(auto\|eq\|page\|[cC]\|labelc\)\?ref\*\?\_\s*{[^{}]*',
         \ 'bib' : '\C\\\a*cite\a*\*\?\(\[[^\]]*\]\)*\_\s*{[^{}]*',
+        \ 'gls' : '\C\\[gG]ls\(symbol\|desc\|link\|pl\)\?\*\?\(\[[^\]]*\]\)*\_\s*{[^{}]*',
         \ })
 endfunction
 
@@ -31,6 +33,16 @@ function! vimtex#complete#init_script() " {{{1
     let s:bibtex = 0
   endif
 
+  " Check if makeglossaries is available
+  let s:glossaries = 1
+  if !executable('makeglossaries')
+    call vimtex#echo#warning('vimtex warning')
+    call vimtex#echo#warning('  glossary completion is not available!',
+          \ 'None')
+    call vimtex#echo#warning('  makeglossaries is not executable', 'None')
+    let s:glossaries = 0
+  endif
+
   " Check if kpsewhich is required and available
   if s:bibtex && g:vimtex_complete_recursive_bib && !executable('kpsewhich')
     call vimtex#echo#warning('vimtex warning')
@@ -40,6 +52,7 @@ function! vimtex#complete#init_script() " {{{1
           \ 'None')
     call vimtex#echo#warning('  kpsewhich is not executable', 'None')
     let s:bibtex = 0
+    let s:glossaries = 0
   endif
 
   " Define auxiliary variable for completion
@@ -54,6 +67,7 @@ function! vimtex#complete#init_script() " {{{1
   let s:re_incsearch  = '''' . s:nocomment
   let s:re_incsearch .= '\\%(input|include)'
   let s:re_incsearch .= '\m\s*{\zs[^}]\+\ze}'''
+  let s:re_gloss = '\\\(long\)\?newglossaryentry{'
 
   "
   " s:label_cache is a dictionary that maps filenames to tuples of the form
@@ -179,6 +193,9 @@ function! vimtex#complete#omnifunc(findstart, base) " {{{1
       return vimtex#complete#labels(a:base)
     elseif s:completion_type ==# 'bib' && s:bibtex
       return vimtex#complete#bibtex(a:base)
+    elseif s:completion_type ==# 'gls' && s:glossaries &&
+          \ g:vimtex_complete_recursive_gls
+      return vimtex#complete#glossary(a:base)
     endif
   endif
 endfunction
@@ -255,6 +272,37 @@ function! vimtex#complete#bibtex(regexp) " {{{1
 endfunction
 
 " }}}1
+function! vimtex#complete#glossary(regexp) " {{{1
+
+  " cd into project root
+  let l:save_pwd = getcwd()
+  execute 'lcd ' . fnameescape(b:vimtex.root)
+
+  let res = []
+     
+  for m in s:search_recursive(function("s:search_glossaries"))
+    if m['label']." ".get(m, 'description') =~ a:regexp
+      let w = {
+            \ 'word': m['label'],
+            \ 'kind': 'g',
+            \ 'menu': get(m, 'description', 'Please provide a description.')
+            \ }
+
+      " Close braces if desired
+      if g:vimtex_complete_close_braces && !s:next_chars_match('^\s*[,}]')
+        let w.word = w.word . '}'
+      endif
+
+      call add(res, w)
+   endif
+  endfor
+  
+  " Go back to previous folder
+  execute 'lcd ' . fnameescape(l:save_pwd)
+  return res
+endfunction
+
+" }}}1
 
 "
 " Bibtex completion
@@ -267,7 +315,12 @@ function! s:bibtex_search(regexp) " {{{1
   execute 'lcd ' . fnameescape(b:vimtex.root)
 
   " Find data from external bib files
-  let bibfiles = join(s:bibtex_find_bibs(), ',')
+  if g:vimtex_complete_recursive_bib
+    let bibfiles = join(s:search_recursive(
+        \ function("s:bibtex_find_bibs")), ',')
+  elseif filereadable(b:vimtex.tex)
+    let bibfiles = join(s:bibtex_find_bibs(readfile(b:vimtex.tex)), ',')
+  endif
   if bibfiles !=# ''
     " Define temporary files
     let tmp = {
@@ -339,41 +392,18 @@ function! s:bibtex_search(regexp) " {{{1
 endfunction
 
 " }}}1
-function! s:bibtex_find_bibs(...) " {{{1
-  if a:0
-    let file = a:1
-  else
-    let file = b:vimtex.tex
-  endif
-
-  if !filereadable(file)
-    return []
-  endif
-  let lines = readfile(file)
-  let bibfiles = []
-
+function! s:bibtex_find_bibs(lines) " {{{1
   "
   " Search for added bibliographies
   " * Parse commands such as \bibliography{file1,file2.bib,...}
   " * This also removes the .bib extensions
   "
-  for entry in map(filter(copy(lines),
+  let bibfiles = []
+  for entry in map(filter(a:lines,
           \ 'v:val =~ ' . s:re_bibs),
         \ 'matchstr(v:val, ' . s:re_bibs . ')')
     let bibfiles += map(split(entry, ','), 'fnamemodify(v:val, '':r'')')
   endfor
-
-  "
-  " Recursively search included files
-  "
-  if g:vimtex_complete_recursive_bib
-    for entry in map(filter(lines,
-          \ 'v:val =~ ' . s:re_incsearch),
-          \ 'matchstr(v:val, ' . s:re_incsearch . ')')
-      let bibfiles += s:bibtex_find_bibs(vimtex#util#kpsewhich(entry))
-    endfor
-  endif
-
   return bibfiles
 endfunction
 
@@ -480,6 +510,91 @@ endfunction
 " }}}1
 
 "
+" Glossary completion
+"
+function! s:search_glossaries(lines) "{{{1
+  let ret = []
+  let entrys = s:separate_glossaryentrys(join(a:lines, ""))
+  for entry in entrys
+    let comp = {}
+    let mat = matchlist(entry, s:re_gloss.'\(.\{-}\)}.\{-}{\(.*\)')
+    let comp.label = mat[2]
+    let espl = s:split_entry(mat[3])
+    if mat[1] ==? 'long'
+        let comp.description = 
+        \s:read_longdescription(espl.remain[match(espl.remain,'{')+1 :])
+    endif
+    for dat in espl['attr']
+      let attribute = split(substitute(dat, '^\s*\(.\{-}\)\s*$', '\1', ''), '=')
+      if len(attribute) > 1 | let comp[attribute[0]] = attribute[1] | endif
+    endfor
+    call add(ret, comp)
+  endfor
+  return ret
+endfunction
+
+" }}}1
+function! s:separate_glossaryentrys(str) "{{{1
+  let str = a:str
+  let entrys = []
+  let pnext = match(str, s:re_gloss) 
+  while pnext != -1
+    let pstart = match(str, s:re_gloss) 
+    let pnext = match(str[pstart+1 : ], s:re_gloss) 
+    call add(entrys, str[ pstart : pnext ])
+    let str = str[  pnext+1 : ]
+  endw
+  return entrys
+endfunction
+
+" }}}1
+function! s:read_longdescription(str) " {{{1
+  let oBracket = 1
+  let pos = 0
+  while pos < len(a:str)
+    if a:str[pos] == '{'
+      let oBracket += 1
+    elseif a:str[pos] == '}'
+      let oBracket -= 1
+    endif
+    if oBracket == 0
+      return substitute(a:str[ : pos-1], '^\s*\(.\{-}\)\s*$', '\1', '')
+    endif
+    let pos+=1
+  endw
+endfunction
+
+" }}}1
+function! s:split_entry(str) " {{{1
+  " Split a \newglossaryentry into it's elements
+  " a:str is the inner glossaryentry followed by an closing curly Bracket
+  " eg. name={theName}, description={desc}, symbol={\ensuremath{s}} } ...
+  " return: [ [substrings], remainingString ]
+  let pos = 0
+  let oldpos = 0
+  let oBracket = 1
+  let ret = []
+  while pos < len(a:str)
+   if a:str[pos] == '{'
+     let oBracket += 1
+   elseif a:str[pos] == '}'
+     let oBracket -= 1
+   endif
+   if oBracket == 1 && a:str[pos] == ','
+     call add(ret, a:str[ oldpos : pos-1 ])
+     let oldpos = pos+1
+   elseif oBracket == 0
+     if  oldpos != pos | call add(ret, a:str[ oldpos : pos-1 ]) | endif
+     return { 'attr': ret, 'remain': a:str[pos+1 : ]}
+   endif
+   let pos += 1
+  endw
+  return { 'attr': ret, 'remain': ''}
+endfunction
+
+" }}}1
+
+"
 " Utility functions
 "
 function! s:next_chars_match(regex) " {{{1
@@ -536,5 +651,33 @@ function! s:tex2unicode(line) " {{{1
 endfunction
 
 " }}}1
+function! s:search_recursive(search_function,...) " {{{1
+  if a:0
+    let file = a:1
+  else
+    let file = b:vimtex.tex
+  endif
 
+  if !filereadable(file)
+    return []
+  endif
+  let lines = readfile(file)
+  let ret = []
+
+  call extend(ret, a:search_function(lines))
+
+  "
+  " Recursively search included files
+  "
+  for entry in map(filter(lines,
+        \ 'v:val =~ ' . s:re_incsearch),
+        \ 'matchstr(v:val, ' . s:re_incsearch . ')')
+    call extend(ret, s:search_recursive(a:search_function,
+        \ vimtex#util#kpsewhich(entry)))
+  endfor
+
+  return ret
+endfunction
+
+" }}}1
 " vim: fdm=marker sw=2

@@ -41,6 +41,7 @@ CONTENTS                                                      *vimtex-contents*
   Completion                                    |vimtex-completion|
     Complete labels                             |vimtex-complete-labels|
     Complete citations                          |vimtex-complete-cites|
+    Complete glossary                           |vimtex-complete-glossary|
     Autocomplete                                |vimtex-complete-auto|
       Neocomplete                               |vimtex-complete-neocomplete|
       YouCompleteMe                             |vimtex-complete-youcompleteme|
@@ -325,6 +326,13 @@ Options~
 
   Default value: 0
 
+*g:vimtex_complete_recursive_gls*
+  This option toggles recursive searching for glossary entrys.
+  
+  Note: This feature may lead to a significant lag for large projects.
+
+  Default value: 0
+
 *g:vimtex_complete_patterns*
   Define patterns that control when the label and citation completion is
   triggered.
@@ -333,6 +341,7 @@ Options~
     let g:vimtex_complete_patterns = {
       \ 'ref' : '\C\\v\?\(eq\|page\|[cC]\)\?ref\*\?\_\s*{[^{}]*',
       \ 'bib' : '\C\\\a*cite\a*\*\?\(\[[^\]]*\]\)*\_\s*{[^{}]*',
+      \ 'gls' : '\C\\[gG]ls\(symbol\|pl\)\?\*\?\(\[[^\]]*\]\)*\_\s*{[^{}]*',
       \ })
 <
 *g:vimtex_change_complete_envs*
@@ -1183,6 +1192,34 @@ Then the bibliography key `knuth1981` will be completed with e.g.: >
 
 In particular, note that regular expressions (or vim patterns) can be used
 after '\cite{' to search for candidates.
+
+------------------------------------------------------------------------------
+Complete glossary~
+                                                     *vimtex-complete-glossary*
+
+Glossary completion is triggered by '\gls{' commands as defined with
+|g:vimtex_complete_patterns.bib|.  The completion parses included
+files (`*.tex`) to gather the completion candidates.
+
+As an example, assume that a glossary entry is included as following: >
+
+        \newglossaryentry{vim}
+        {
+            name={vim},
+            description={The power tool for everyone!},
+            symbol={\ensuremath{V}}
+        }
+
+Then the bibliography key `vim` will be completed with e.g.: >
+
+        \gls{vi<CTRL-X><CTRL-O>
+        \gls{power<CTRL-X><CTRL-O>
+
+In particular, note that regular expressions (or vim patterns) can be used
+after '\cite{' to search for candidates.
+
+Note: The glossary completion is disabled by default. To enable the glossary
+completion set |g:vimtex_complete_recursive_gls| to 1
 
 ------------------------------------------------------------------------------
 Autocomplete~
